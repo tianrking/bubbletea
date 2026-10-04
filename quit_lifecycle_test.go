@@ -9,7 +9,7 @@ import (
 )
 
 type quitLifecycleModel struct {
-	init func()
+	init     func()
 	onUpdate func(Msg) Cmd
 }
 
