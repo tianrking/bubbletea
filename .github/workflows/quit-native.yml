@@ -1,0 +1,205 @@
+name: Quit lifecycle complete native validation
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+        go: ['1.26.0', '1.27.1']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: git config --global core.autocrlf input
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fbe2607009556aa7a7c1abe4efc32211d8a74388
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Record exact actual working source
+        id: source
+        run: |
+          mkdir artifacts
+          git rev-parse HEAD > artifacts/source-sha.txt
+          test "$(cat artifacts/source-sha.txt)" = fbe2607009556aa7a7c1abe4efc32211d8a74388
+          git hash-object --path=tea.go tea.go > artifacts/production-before.blob
+          git hash-object --path=quit_lifecycle_test.go quit_lifecycle_test.go > artifacts/test-before.blob
+          test "$(cat artifacts/production-before.blob)" = 3184ae16b131c090295d4e842a492ea0cdbc6539
+          test "$(cat artifacts/test-before.blob)" = 287a36b145af5c109c52e7d49b51122a2533cf3f
+          sha256sum tea.go quit_lifecycle_test.go > artifacts/source-before.sha256
+          git diff --exit-code HEAD --
+          git status --porcelain --untracked-files=no > artifacts/tracked-status-before.txt
+          test ! -s artifacts/tracked-status-before.txt
+          go version > artifacts/root-go-version.txt
+          go env GOOS GOARCH GOVERSION GOTOOLCHAIN > artifacts/root-go-environment.txt
+      - name: Frozen regressions and complete root native checks
+        id: root
+        run: |
+          set +e
+          go test -race -run '^TestProgram(QuitUnstarted|QuitBeforeRunPreservesMessages|QuitDuringInitialization|QuitRespectsFilter|SendBeforeRunStillWaits)$' -count=10 -json . > artifacts/focused.jsonl 2> artifacts/focused-stderr.log
+          echo $? > artifacts/focused.exit
+          go test -race -count 4 -cpu 1,4 -json ./... > artifacts/task-test.jsonl 2> artifacts/task-test-stderr.log
+          echo $? > artifacts/task-test.exit
+          go test -json ./... > artifacts/root-test.jsonl 2> artifacts/root-test-stderr.log
+          echo $? > artifacts/root-test.exit
+          go build ./... > artifacts/root-build.log 2>&1
+          echo $? > artifacts/root-build.exit
+          go vet ./... > artifacts/root-vet.log 2>&1
+          echo $? > artifacts/root-vet.exit
+          go mod tidy > artifacts/root-tidy.log 2>&1
+          echo $? > artifacts/root-tidy.exit
+          git diff --exit-code HEAD -- > artifacts/root-tidy.diff
+          echo $? > artifacts/root-tidy-diff.exit
+          gofmt -d tea.go quit_lifecycle_test.go > artifacts/gofmt.diff
+          echo $? > artifacts/gofmt.exit
+          set -e
+          for result in artifacts/*.exit; do test "$(cat "$result")" = 0; done
+          test ! -s artifacts/gofmt.diff
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        if: ${{ !cancelled() && steps.source.conclusion == 'success' }}
+        with:
+          go-version: ${{ matrix.go == '1.26.0' && '1.26.7' || matrix.go }}
+      - name: Complete examples native checks
+        if: ${{ !cancelled() && steps.source.conclusion == 'success' }}
+        run: |
+          go version > artifacts/examples-go-version.txt
+          set +e
+          (cd examples && go build ./...) > artifacts/examples-build.log 2>&1
+          echo $? > artifacts/examples-build.exit
+          (cd examples && go test -json ./...) > artifacts/examples-test.jsonl 2> artifacts/examples-test-stderr.log
+          echo $? > artifacts/examples-test.exit
+          (cd examples && go mod tidy) > artifacts/examples-tidy.log 2>&1
+          echo $? > artifacts/examples-tidy.exit
+          git diff --exit-code HEAD -- > artifacts/examples-tidy.diff
+          echo $? > artifacts/examples-tidy-diff.exit
+          set -e
+          for result in artifacts/examples-*.exit; do test "$(cat "$result")" = 0; done
+      - name: Real PTY public lifecycle
+        if: ${{ !cancelled() && steps.source.conclusion == 'success' && runner.os != 'Windows' }}
+        run: |
+          git show '${{ github.sha }}:.github/native/quit-probe.go' > artifacts/quit-probe.go
+          git show '${{ github.sha }}:.github/native/quit-pty.py' > artifacts/quit-pty.py
+          go build -race -o artifacts/quit-probe artifacts/quit-probe.go
+          python3 artifacts/quit-pty.py "$PWD/artifacts/quit-probe" fixed artifacts/pty-fixed
+      - name: Verify actual source after all checks
+        if: ${{ !cancelled() && steps.source.conclusion == 'success' }}
+        run: |
+          sha256sum tea.go quit_lifecycle_test.go > artifacts/source-after.sha256
+          sha256sum -c artifacts/source-before.sha256 > artifacts/source-after-check.log
+          git hash-object --path=tea.go tea.go > artifacts/production-after.blob
+          git hash-object --path=quit_lifecycle_test.go quit_lifecycle_test.go > artifacts/test-after.blob
+          cmp artifacts/production-before.blob artifacts/production-after.blob
+          cmp artifacts/test-before.blob artifacts/test-after.blob
+          git rev-parse HEAD > artifacts/source-after-sha.txt
+          cmp artifacts/source-sha.txt artifacts/source-after-sha.txt
+          git diff --exit-code HEAD -- > artifacts/tracked-diff-after.patch
+          git status --porcelain --untracked-files=no > artifacts/tracked-status-after.txt
+          test ! -s artifacts/tracked-status-after.txt
+      - name: Hash all native evidence
+        if: always()
+        run: |
+          find artifacts -type f ! -name SHA256SUMS ! -name quit-probe -print0 | sort -z | xargs -0 sha256sum > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: quit-native-${{ matrix.os }}-${{ matrix.go }}
+          path: |
+            artifacts/
+            !artifacts/quit-probe
+  baseline:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 96d69d2f7eb182bb311be08fc56ed2c208239aff
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.26.0'
+      - name: Record baseline and run unchanged Taskfile tests
+        run: |
+          mkdir artifacts
+          git rev-parse HEAD > artifacts/source-sha.txt
+          git hash-object --path=tea.go tea.go > artifacts/production-before.blob
+          sha256sum tea.go > artifacts/source-before.sha256
+          go version > artifacts/go-version.txt
+          set +e
+          go test -race -count 4 -cpu 1,4 -json ./... > artifacts/task-test.jsonl 2> artifacts/task-test-stderr.log
+          echo $? > artifacts/task-test.exit
+          set -e
+          git show '${{ github.sha }}:.github/native/quit-probe.go' > artifacts/quit-probe.go
+          git show '${{ github.sha }}:.github/native/quit-pty.py' > artifacts/quit-pty.py
+          go build -race -o artifacts/quit-probe artifacts/quit-probe.go
+          python3 artifacts/quit-pty.py "$PWD/artifacts/quit-probe" blocked artifacts/pty-original
+          sha256sum -c artifacts/source-before.sha256 > artifacts/source-after-check.log
+          git hash-object --path=tea.go tea.go > artifacts/production-after.blob
+          cmp artifacts/production-before.blob artifacts/production-after.blob
+          git diff --exit-code HEAD -- > artifacts/tracked-diff-after.patch
+          git status --porcelain --untracked-files=no > artifacts/tracked-status-after.txt
+          test ! -s artifacts/tracked-status-after.txt
+      - name: Hash baseline evidence
+        if: always()
+        run: |
+          find artifacts -type f ! -name SHA256SUMS ! -name quit-probe -print0 | sort -z | xargs -0 sha256sum > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: quit-original-task-and-pty
+          path: |
+            artifacts/
+            !artifacts/quit-probe
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fbe2607009556aa7a7c1abe4efc32211d8a74388
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.26.0'
+      - name: Complete configured lint and govulncheck
+        run: |
+          mkdir artifacts
+          git rev-parse HEAD > artifacts/source-sha.txt
+          sha256sum tea.go quit_lifecycle_test.go > artifacts/source-before.sha256
+          git hash-object --path=tea.go tea.go > artifacts/production-before.blob
+          git hash-object --path=quit_lifecycle_test.go quit_lifecycle_test.go > artifacts/test-before.blob
+          go version > artifacts/go-version.txt
+          set +e
+          go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.9.0 version > artifacts/lint-version.log 2>&1
+          echo $? > artifacts/lint-version.exit
+          go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.9.0 run --timeout=10m ./... > artifacts/lint.log 2>&1
+          echo $? > artifacts/lint.exit
+          go run golang.org/x/vuln/cmd/govulncheck@latest -version > artifacts/govulncheck-version.log 2>&1
+          echo $? > artifacts/govulncheck-version.exit
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./... > artifacts/govulncheck.log 2>&1
+          echo $? > artifacts/govulncheck.exit
+          set -e
+          sha256sum tea.go quit_lifecycle_test.go > artifacts/source-after.sha256
+          sha256sum -c artifacts/source-before.sha256 > artifacts/source-after-check.log
+          git hash-object --path=tea.go tea.go > artifacts/production-after.blob
+          git hash-object --path=quit_lifecycle_test.go quit_lifecycle_test.go > artifacts/test-after.blob
+          cmp artifacts/production-before.blob artifacts/production-after.blob
+          cmp artifacts/test-before.blob artifacts/test-after.blob
+          git rev-parse HEAD > artifacts/source-after-sha.txt
+          cmp artifacts/source-sha.txt artifacts/source-after-sha.txt
+          git diff --exit-code HEAD -- > artifacts/tracked-diff-after.patch
+          git status --porcelain --untracked-files=no > artifacts/tracked-status-after.txt
+          test ! -s artifacts/tracked-status-after.txt
+          for result in artifacts/*.exit; do test "$(cat "$result")" = 0; done
+      - name: Hash quality evidence
+        if: always()
+        run: |
+          find artifacts -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: quit-complete-quality
+          path: artifacts/
