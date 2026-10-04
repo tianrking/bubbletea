@@ -8,7 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 04903011ea23cbda8005ab907c215ea1dad2064f
+          ref: 38c6e4e50aecf87b809c0bd020f941f03cbb651c
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -19,11 +19,11 @@ jobs:
         run: |
           mkdir artifacts
           git rev-parse HEAD > artifacts/source-sha.txt
-          test "$(cat artifacts/source-sha.txt)" = 04903011ea23cbda8005ab907c215ea1dad2064f
+          test "$(cat artifacts/source-sha.txt)" = 38c6e4e50aecf87b809c0bd020f941f03cbb651c
           git rev-parse HEAD:tea.go > artifacts/production-blob.txt
           git rev-parse HEAD:quit_lifecycle_test.go > artifacts/test-blob.txt
           test "$(cat artifacts/production-blob.txt)" = ea9e216fca365ef31063e0c672ea6d0e0e46357e
-          test "$(cat artifacts/test-blob.txt)" = c1111317a793de9fee6990adc62b4107a0d3e790
+          test "$(cat artifacts/test-blob.txt)" = 287a36b145af5c109c52e7d49b51122a2533cf3f
           git hash-object --path=tea.go tea.go > artifacts/worktree-production-before.blob
           git hash-object --path=quit_lifecycle_test.go quit_lifecycle_test.go > artifacts/worktree-test-before.blob
           cmp artifacts/production-blob.txt artifacts/worktree-production-before.blob
@@ -81,3 +81,4 @@ jobs:
         with:
           name: quit-original-native-red
           path: artifacts/
+
