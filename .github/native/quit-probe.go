@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 
@@ -30,4 +31,10 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, "QUIT-LIFECYCLE-DONE")
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "QUIT-LIFECYCLE-CANONICAL:%s", line)
 }

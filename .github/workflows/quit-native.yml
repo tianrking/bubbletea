@@ -1,4 +1,4 @@
-name: Quit lifecycle macOS PTY diagnostics
+name: Quit lifecycle canonical PTY verification
 on: [push, workflow_dispatch]
 permissions:
   contents: read
@@ -10,9 +10,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-24.04, macos-latest]
         go: ['1.26.0', '1.27.1']
         source: [original, fixed]
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -65,6 +66,7 @@ jobs:
           git status --porcelain --untracked-files=no > artifacts/tracked-status-after.txt
           test ! -s artifacts/tracked-status-after.txt
           test "$(cat artifacts/pty-controlling.exit)" = 0
+          test "$(cat artifacts/pty-inherited.exit)" = 0
       - name: Hash diagnostic evidence
         if: always()
         run: |
@@ -72,7 +74,8 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: quit-macos-pty-${{ matrix.source }}-${{ matrix.go }}
+          name: quit-final-pty-${{ matrix.os }}-${{ matrix.source }}-${{ matrix.go }}
           path: |
             artifacts/
             !artifacts/quit-probe
+

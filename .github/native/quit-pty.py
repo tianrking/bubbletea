@@ -53,6 +53,8 @@ try:
         assert not read_until(b'QUIT-LIFECYCLE-RETURNED', 3), 'original Quit unexpectedly returned'
         assert process.poll() is None, 'original process exited unexpectedly'
         assert b'QUIT-LIFECYCLE-READY' not in captured, 'original unexpectedly entered Run'
+        states['after'] = termios.tcgetattr(slave)
+        assert states['after'] == before, 'blocked original unexpectedly changed terminal state'
         process.kill()
         process.wait(timeout=5)
         result = {'expectation': expectation, 'originalPreRunQuitBlocked': True,
@@ -65,13 +67,21 @@ try:
         assert active != before, 'Program never changed real PTY termios to raw input'
         os.write(master, b'q')
         assert read_until(b'QUIT-LIFECYCLE-DONE', 10), 'key q did not terminate Run'
+        states['immediateAfterRun'] = termios.tcgetattr(slave)
+        os.write(master, b'canonical-after-run')
+        assert not read_until(b'QUIT-LIFECYCLE-CANONICAL:', 0.2), 'post-Run input completed before a newline'
+        after = termios.tcgetattr(slave)
+        states['after'] = after
+        assert after == before, 'PTY termios state not preserved/restored'
+        os.write(master, b'\n')
+        assert read_until(b'QUIT-LIFECYCLE-CANONICAL:canonical-after-run', 5), 'post-Run canonical line was not delivered'
+        assert b'canonical-after-run\r\n' in captured, 'post-Run canonical input was not echoed'
         assert process.wait(timeout=5) == 0, 'fixed app returned an error'
         result = {'expectation': expectation, 'preRunQuitReturned': expectation != 'baseline-running',
                   'realPTYViewRendered': True, 'actualRawInputObserved': True,
-                  'keyQGracefullyQuit': True, 'nativeExit': 0}
-    after = termios.tcgetattr(slave)
-    states['after'] = after
-    assert after == before, 'PTY termios state not preserved/restored'
+                  'keyQGracefullyQuit': True, 'nativeExit': 0,
+                  'postRunCanonicalLineHeldUntilNewline': True,
+                  'postRunCanonicalLineDeliveredAndEchoed': True}
     result.update({'termiosBeforeAfterEqual': True, 'captureBytes': len(captured),
                    'geometry': '40x10', 'platform': sys.platform, 'controllingTTY': controlling})
     Path(output_prefix + '.json').write_text(json.dumps(result, indent=2))
