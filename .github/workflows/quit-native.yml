@@ -1,0 +1,83 @@
+name: Quit lifecycle original native RED
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  original:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 04903011ea23cbda8005ab907c215ea1dad2064f
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.26.0'
+          cache: true
+      - name: Record actual original working files
+        shell: bash
+        run: |
+          mkdir artifacts
+          git rev-parse HEAD > artifacts/source-sha.txt
+          test "$(cat artifacts/source-sha.txt)" = 04903011ea23cbda8005ab907c215ea1dad2064f
+          git rev-parse HEAD:tea.go > artifacts/production-blob.txt
+          git rev-parse HEAD:quit_lifecycle_test.go > artifacts/test-blob.txt
+          test "$(cat artifacts/production-blob.txt)" = ea9e216fca365ef31063e0c672ea6d0e0e46357e
+          test "$(cat artifacts/test-blob.txt)" = c1111317a793de9fee6990adc62b4107a0d3e790
+          git hash-object --path=tea.go tea.go > artifacts/worktree-production-before.blob
+          git hash-object --path=quit_lifecycle_test.go quit_lifecycle_test.go > artifacts/worktree-test-before.blob
+          cmp artifacts/production-blob.txt artifacts/worktree-production-before.blob
+          cmp artifacts/test-blob.txt artifacts/worktree-test-before.blob
+          sha256sum tea.go quit_lifecycle_test.go > artifacts/source-before.sha256
+          git diff --exit-code HEAD --
+          git status --porcelain --untracked-files=no > artifacts/tracked-status-before.txt
+          test ! -s artifacts/tracked-status-before.txt
+          go version > artifacts/go-version.txt
+          go env GOOS GOARCH GOVERSION GOTOOLCHAIN > artifacts/go-environment.txt
+          gofmt -d quit_lifecycle_test.go > artifacts/gofmt.diff
+      - name: Frozen native regressions must fail as assertions
+        shell: bash
+        run: |
+          set +e
+          go test -race -run '^TestProgram(QuitUnstarted|QuitBeforeRunPreservesMessages|QuitDuringInitialization|QuitRespectsFilter|SendBeforeRunStillWaits)$' -count=1 -json . > artifacts/focused.jsonl 2> artifacts/compile-stderr.log
+          result=$?
+          set -e
+          echo "$result" > artifacts/focused.exit
+          test "$result" = 1
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          events = [json.loads(line) for line in Path('artifacts/focused.jsonl').read_text().splitlines()]
+          failures = [e['Test'] for e in events if e.get('Action') == 'fail' and e.get('Test')]
+          passes = [e['Test'] for e in events if e.get('Action') == 'pass' and e.get('Test')]
+          expected = {'TestProgramQuitUnstarted/model', 'TestProgramQuitUnstarted/model#01', 'TestProgramQuitUnstarted', 'TestProgramQuitBeforeRunPreservesMessages'}
+          assert set(failures) == expected, (failures, passes)
+          assert set(passes) == {'TestProgramQuitDuringInitialization', 'TestProgramQuitRespectsFilter', 'TestProgramSendBeforeRunStillWaits'}, passes
+          assert not any(e.get('Action') == 'skip' for e in events)
+          assert 'DATA RACE' not in Path('artifacts/focused.jsonl').read_text()
+          Path('artifacts/regression-summary.json').write_text(json.dumps({'actualNativeExit': 1, 'failedTests': failures, 'passingControls': passes}, indent=2))
+          PY
+      - name: Verify actual source after native execution
+        shell: bash
+        run: |
+          sha256sum tea.go quit_lifecycle_test.go > artifacts/source-after.sha256
+          sha256sum -c artifacts/source-before.sha256 > artifacts/source-after-check.log
+          git hash-object --path=tea.go tea.go > artifacts/worktree-production-after.blob
+          git hash-object --path=quit_lifecycle_test.go quit_lifecycle_test.go > artifacts/worktree-test-after.blob
+          cmp artifacts/production-blob.txt artifacts/worktree-production-after.blob
+          cmp artifacts/test-blob.txt artifacts/worktree-test-after.blob
+          git rev-parse HEAD > artifacts/source-after-sha.txt
+          cmp artifacts/source-sha.txt artifacts/source-after-sha.txt
+          git diff --exit-code HEAD -- > artifacts/tracked-diff-after.patch
+          git status --porcelain --untracked-files=no > artifacts/tracked-status-after.txt
+          test ! -s artifacts/tracked-status-after.txt
+      - name: Hash all native evidence
+        if: always()
+        shell: bash
+        run: |
+          find artifacts -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: quit-original-native-red
+          path: artifacts/
