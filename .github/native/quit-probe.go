@@ -21,7 +21,9 @@ func (model) View() tea.View { return tea.NewView("QUIT-LIFECYCLE-READY") }
 func main() {
 	p := tea.NewProgram(model{}, tea.WithoutSignalHandler())
 	fmt.Fprintln(os.Stderr, "QUIT-LIFECYCLE-PRECALL")
-	p.Quit()
+	if os.Getenv("QUIT_LIFECYCLE_SKIP_PRECALL") != "1" {
+		p.Quit()
+	}
 	fmt.Fprintln(os.Stderr, "QUIT-LIFECYCLE-RETURNED")
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
