@@ -1,8 +1,5 @@
 name: lint-sync
 on:
-  schedule:
-    # every Sunday at midnight
-    - cron: "0 0 * * 0"
   workflow_dispatch: # allows manual triggering
 
 permissions:
